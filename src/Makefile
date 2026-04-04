@@ -1,6 +1,6 @@
 all : build
 
-TARGET:=prog_midi_v003
+TARGET:=v003_prog_midi
 CH32FUN:=../rv003usb/ch32fun/ch32fun
 TARGET_MCU:=CH32V003
 DIST_DIR:=../dist
