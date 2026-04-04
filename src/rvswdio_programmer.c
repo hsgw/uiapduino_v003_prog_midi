@@ -47,6 +47,8 @@
 #include "ch5xx.h"
 #endif
 
+#define PIN_MODE_SWITCH PC3
+
 // --- MODE SWITCH ---
 uint8_t is_midi_mode = 0;
 
@@ -336,13 +338,12 @@ static void HandleCommandBuffer(uint8_t *buffer) {
 int main() {
 	SystemInit();
 	
-	// Mode check on PC3
-	RCC->APB2PCENR |= RCC_APB2Periph_GPIOC;
-	GPIOC->CFGLR &= ~(0xf << (4 * 3));
-	GPIOC->CFGLR |= (GPIO_Speed_In | GPIO_CNF_IN_PUPD) << (4 * 3);
-	GPIOC->BSHR = GPIO_BSHR_BS3; // Pull-up
+	// Mode check on PIN_MODE_SWITCH
+	funGpioInitAll();
+	funPinMode(PIN_MODE_SWITCH, GPIO_Speed_In | GPIO_CNF_IN_PUPD);
+	funDigitalWrite(PIN_MODE_SWITCH, 1); // Pull-up
 	Delay_Ms(10);
-	if (GPIOC->INDR & (1 << 3)) {
+	if (funDigitalRead(PIN_MODE_SWITCH)) {
 		is_midi_mode = 1;
 		set_usb_mode_midi();
 	} else {
