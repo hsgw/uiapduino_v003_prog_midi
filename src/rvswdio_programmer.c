@@ -47,9 +47,71 @@
 #include "ch5xx.h"
 #endif
 
-struct SWIOState state;
+// --- MODE SWITCH ---
+uint8_t is_midi_mode = 0;
 
-// Allow reading and writing to the scratchpad via HID control messages.
+// --- MIDI DATA ---
+typedef struct {
+	volatile uint8_t len;
+	uint8_t buffer[8];
+} midi_message_t;
+
+midi_message_t midi_in;
+
+void midi_send(uint8_t * msg, uint8_t len)
+{
+	memcpy( midi_in.buffer, msg, len );
+	midi_in.len = len;
+}
+#define midi_send_ready() (midi_in.len == 0)
+
+const uint16_t noteLookup[128] = { 65535,61856,58385,55108,52015,49096,46340,43739,41284,38967,36780,34716,32767,30928,29192,27554,26007,24548,23170,21870,20642,19484,18390,17358,16384,15464,14596,13777,13004,12274,11585,10935,10321,9742,9195,8679,8192,7732,7298,6888,6502,6137,5792,5467,5161,4871,4598,4339,4096,3866,3649,3444,3251,3068,2896,2734,2580,2435,2299,2170,2048,1933,1825,1722,1625,1534,1448,1367,1290,1218,1149,1085,1024,967,912,861,813,767,724,683,645,609,575,542,512,483,456,431,406,384,362,342,323,304,287,271,256,242,228,215,203,192,181,171,161,152,144,136,128,121,114,108,102,96,91,85,81,76,72,68,64,60,57,54,51,48,45,43 };
+
+void tim2_set_period(uint16_t period)
+{
+	if (period) {
+		TIM2->ATRLR = period;
+		TIM2->CTLR1 |= TIM_CEN;
+	} else {
+		TIM2->CTLR1 &= ~TIM_CEN;
+	}
+}
+
+void midi_receive(uint8_t * msg)
+{
+	static uint8_t note;
+	if (msg[1] == 0x90 && msg[3] !=0) {
+		note = msg[2];
+		tim2_set_period( noteLookup[ note ] );
+	}
+	else if (msg[2] == note && (msg[1]==0x80 || (msg[1]==0x90 && msg[3]==0)) ) {
+		tim2_set_period(0);
+	}
+}
+
+void scan_keyboard(void)
+{
+	static uint8_t keystate = 0;
+	uint8_t midi_msg[4] = {0x09, 0x90, 0x40, 0x7F};
+	uint16_t input = GPIOC->INDR;
+	for (uint8_t i = 2; i <= 5; i++) {
+		uint8_t mask = (1<<i);
+		if ((input & mask) != (keystate & mask)) {
+			midi_msg[2] = 0x40+i;
+			if (input & mask) {
+				midi_msg[3] = 0x00;
+			} else {
+				midi_msg[3] = 0x7F;
+			}
+			while (!midi_send_ready()) {};
+			midi_send(midi_msg, 4);
+		}
+	}
+	keystate = input;
+}
+
+// --- PROGRAMMER DATA ---
+struct SWIOState state;
 __attribute__((aligned(4))) uint8_t scratch[264];
 __attribute__((aligned(4))) uint8_t retbuff[264];
 volatile uint32_t scratch_run = 0;
@@ -63,7 +125,6 @@ static void SetupProgrammer(void) {
 
 static void SwitchMode(uint8_t **liptr, uint8_t **lretbuffptr) {
   programmer_mode = *((*liptr)++);
-  // Unknown Programmer
   *((*lretbuffptr)++) = PROGRAMMER_PROTOCOL_NUMBER;
   *((*lretbuffptr)++) = programmer_mode;
   BB_PRINTF_DEBUG("PM %d\n", programmer_mode);
@@ -73,8 +134,6 @@ static void SwitchMode(uint8_t **liptr, uint8_t **lretbuffptr) {
 }
 
 static void HandleCommandBuffer(uint8_t *buffer) {
-  // Is send.
-  // buffer[0] is the request ID.
   uint8_t *iptr = &buffer[1];
   uint8_t *retbuffptr = retbuff + 1;
 #define reqlen (sizeof(scratch) - 1)
@@ -84,24 +143,19 @@ static void HandleCommandBuffer(uint8_t *buffer) {
   while (iptr - buffer < reqlen) {
     uint8_t cmd = *(iptr++);
     int remain = reqlen - (iptr - buffer);
-    // Make sure there is plenty of space.
     if ((sizeof(retbuff) - (retbuffptr - retbuff)) < 6)
       break;
 
     if (programmer_mode == 0) {
-      if (cmd == 0xfe) // We will never write to 0x7f.
+      if (cmd == 0xfe)
       {
         cmd = *(iptr++);
-
         switch (cmd) {
         case 0xfd:
           SwitchMode(&iptr, &retbuffptr);
           break;
         case 0x0e:
         case 0x01: {
-          // DoSongAndDanceToEnterPgmMode( &state ); was 1.  But really we just
-          // want to init.
-          //  if we expect this, we can use 0x0e to get status.
           funPinMode(PIN_TARGETPOWER, PIN_TARGETPOWER_MODE);
           funDigitalWrite(PIN_TARGETPOWER, POWER_ON);
           int r = InitializeSWDSWIO(&state);
@@ -109,28 +163,27 @@ static void HandleCommandBuffer(uint8_t *buffer) {
             *(retbuffptr++) = r;
           break;
         }
-        case 0x02: // Power-down
-          BB_PRINTF_DEBUG("Power down\n");
+        case 0x02:
           funDigitalWrite(PIN_TARGETPOWER, POWER_OFF);
           break;
-        case 0x03: // Power-up
+        case 0x03:
           funPinMode(PIN_TARGETPOWER, PIN_TARGETPOWER_MODE);
           funDigitalWrite(PIN_TARGETPOWER, POWER_ON);
           break;
-        case 0x04: // Delay( uint16_t us )
+        case 0x04:
           Delay_Us(iptr[0] | (iptr[1] << 8));
           iptr += 2;
           break;
-        case 0x05: // Void High Level State
+        case 0x05:
           ResetInternalProgrammingState(&state);
           break;
-        case 0x06: // Wait-for-flash-op.
+        case 0x06:
           *(retbuffptr++) = WaitForFlash(&state);
           break;
-        case 0x07: // Wait-for-done-op.
+        case 0x07:
           *(retbuffptr++) = WaitForDoneOp(&state);
           break;
-        case 0x08: // Write Data32.
+        case 0x08:
         {
           if (remain >= 9) {
             int r = WriteWord(
@@ -142,7 +195,7 @@ static void HandleCommandBuffer(uint8_t *buffer) {
           }
           break;
         }
-        case 0x09: // Read Data32.
+        case 0x09:
         {
           if (remain >= 4) {
             int r = ReadWord(&state,
@@ -172,23 +225,19 @@ static void HandleCommandBuffer(uint8_t *buffer) {
           break;
         case 0x0c:
           if (remain >= 8) {
-            // On the ESP32-S2, this will output clock on P2.
-            int use_apll = *(iptr++); // try 1
-            int sdm0 = *(iptr++);     // try 0
-            iptr += 6;                // reserved + SDM values.
-
-            // Output MCO clock on PC4.
+            int use_apll = *(iptr++);
+            int sdm0 = *(iptr++);
+            iptr += 6;
             if (use_apll) {
               RCC->CFGR0 =
                   (RCC->CFGR0 & (~(7 << 24))) | (sdm0 << 24) | (1 << 26);
-              // 0 = SYSCLK, 1 = RC, 2 = HSE, 3 = PLL
               funPinMode(PC4, GPIO_CFGLR_OUT_50Mhz_AF_PP);
             } else {
               RCC->CFGR0 &= ~(7 << 24);
             }
           }
           break;
-        case 0x0d: // Do a terminal log through.
+        case 0x0d:
         {
           int tries = 100;
           if (remain >= 8) {
@@ -207,31 +256,27 @@ static void HandleCommandBuffer(uint8_t *buffer) {
               if (r >= 0) {
                 retbuffptr += r;
                 if (tries-- <= 0)
-                  break; // ran out of time?
+                  break;
               } else {
                 break;
               }
               canrx = (sizeof(retbuff) - (retbuffptr - retbuff)) - 8;
-              // Otherwise all is well.  If we aren't signaling try to poll for
-              // more data.
               if (leavevalA != 0 || leavevalB != 0)
                 break;
             }
           }
           break;
         }
-        case 0x0f: // Override chip type, etc.
+        case 0x0f:
           if (remain >= 8) {
             state.target_chip_type = *(iptr++);
             state.sectorsize = iptr[0] | (iptr[1] << 8);
             iptr += 2;
-            // Rest is reserved.
             iptr += 5;
-            *(retbuffptr++) = 0; // Reply is always 0.
+            *(retbuffptr++) = 0;
           }
           break;
-
-        case 0x10: // DetermineChip
+        case 0x10:
         {
           int r = DetermineChipTypeAndSectorInfo(&state, &retbuffptr[1]);
           retbuffptr[0] = r;
@@ -239,10 +284,7 @@ static void HandleCommandBuffer(uint8_t *buffer) {
             memset(&retbuffptr[1], 0, 6);
           retbuffptr += 7;
         } break;
-        // case 0x11:
-        // Set clock
-        // break;
-        case 0x12: // WriteBlock
+        case 0x12:
           if (remain >= 70) {
             uint32_t length = iptr[4];
             uint8_t erase = iptr[5];
@@ -254,125 +296,15 @@ static void HandleCommandBuffer(uint8_t *buffer) {
             *(retbuffptr++) = r;
           }
           break;
-#if CH5xx_SUPPORT
-        case 0x20: // ch5xx_write_flash
-        case 0x21:
-          if (remain >= 260) {
-            int8_t r = 0;
-            uint32_t length = iptr[4];
-            if (length == 0)
-              length = 256;
-            if (cmd == 0x20)
-              r = ch5xx_write_flash(&state,
-                                    iptr[0] | (iptr[1] << 8) | (iptr[2] << 16) |
-                                        (iptr[3] << 24),
-                                    (uint8_t *)&iptr[5], length);
-            else
-              r = ch5xx_write_flash_using_microblob(
-                  &state,
-                  iptr[0] | (iptr[1] << 8) | (iptr[2] << 16) | (iptr[3] << 24),
-                  (uint8_t *)&iptr[5], length);
-            iptr += 260;
-            *(retbuffptr++) = r;
-          }
-          break;
-        case 0x22: // End writing
-        {
-          if (state.microblob_running > -1)
-            ch5xx_microblob_end(&state);
-          if (state.writing_flash > 0) {
-            ch5xx_flash_close(&state);
-            state.writing_flash = 0;
-          }
-        } break;
-        case 0x23: // CH5xx read EEPROM
-          if (remain >= 6) {
-            uint32_t length = iptr[4] | (iptr[5] << 8);
-            if (length < sizeof(retbuff) - 1) {
-              int8_t r = ch5xx_read_eeprom(
-                  &state,
-                  iptr[0] | (iptr[1] << 8) | (iptr[2] << 16) | (iptr[3] << 24),
-                  &retbuffptr[1], length);
-              retbuffptr[0] = r;
-              if (r < 0)
-                memset(&retbuffptr[1], 0, length);
-              retbuffptr += length + 1;
-            } else {
-              retbuffptr[0] = -100;
-            }
-            iptr += 8;
-          }
-          break;
-        case 0x24: // CH5xx read Option Bytes
-          if (remain >= 6) {
-            uint32_t length = iptr[4] | (iptr[5] << 8);
-            if (length < (retbuffptr - retbuff - 1)) {
-              int8_t r = ch5xx_read_options_bulk(
-                  &state,
-                  iptr[0] | (iptr[1] << 8) | (iptr[2] << 16) | (iptr[3] << 24),
-                  &retbuffptr[1], length);
-              retbuffptr[0] = r;
-              if (r < 0)
-                memset(&retbuffptr[1], 0, length);
-              retbuffptr += length + 1;
-            } else {
-              retbuffptr[0] = -100;
-            }
-            iptr += 8;
-          }
-          break;
-        case 0x25: // CH5xx Erase
-          if (remain >= 9) {
-            int8_t r = CH5xxErase(
-                &state,
-                iptr[0] | (iptr[1] << 8) | (iptr[2] << 16) | (iptr[3] << 24),
-                iptr[4] | (iptr[5] << 8) | (iptr[6] << 16) | (iptr[7] << 24),
-                (enum MemoryArea)(iptr[8]));
-            iptr += 9;
-            *(retbuffptr++) = r;
-          }
-          break;
-        case 0x26: // Can disable this for extra 500 bytes of free flash
-          if (((uint32_t)&retbuffptr - (uint32_t)&retbuff - 1) > 8) {
-            int8_t r = ch5xx_read_uuid(&state, &retbuffptr[1]);
-            retbuffptr[0] = r;
-            if (r < 0)
-              memset(&retbuffptr[1], 0, 8);
-            retbuffptr += 9;
-          } else {
-            retbuffptr[0] = -100;
-          }
-          iptr++;
-          break;
-        case 0x27: // This also optional, disabling gives 400 bytes
-          ch570_disable_read_protection(&state);
-          break;
-        case 0x28:
-          if (remain >= 4) {
-            int8_t r =
-                ch5xx_set_clock(&state, iptr[0] | (iptr[1] << 8) |
-                                            (iptr[2] << 16) | (iptr[3] << 24));
-            iptr += 4;
-            *(retbuffptr++) = r;
-          }
-          break;
-#endif
-          // Done
         }
       } else if (cmd == 0xff) {
         break;
       } else {
-        // Otherwise it's a regular command.
-        // 7-bit-cmd .. 1-bit read(0) or write(1)
-        // if command lines up to a normal QingKeV2 debug command, treat it as
-        // that command. Now addresses are shifted by -1 to fit 0x7f register
-
         if (cmd & 1) {
           if (remain >= 4) {
-            cmd = (cmd >> 1) + 1; // Unshift from -1 to be able to read 0x7f
+            cmd = (cmd >> 1) + 1;
             if (cmd >= DMPROGBUF0 && cmd <= DMPROGBUF7)
-              state.statetag = STTAG("XXXX"); // Reset statetag in case we are
-                                              // writing to progbuf from outside
+              state.statetag = STTAG("XXXX");
             MCFWriteReg32(&state, cmd,
                           iptr[0] | (iptr[1] << 8) | (iptr[2] << 16) |
                               (iptr[3] << 24));
@@ -389,126 +321,9 @@ static void HandleCommandBuffer(uint8_t *buffer) {
           }
         }
       }
-    } else if (programmer_mode == 1) {
-      if (cmd == 0xff)
-        break;
-#if 0
-			switch( cmd )
-			{
-			case 0xfe:
-			{
-				cmd = *(iptr++);
-				if( cmd == 0xfd )
-				{
-					SwitchMode( &iptr, &retbuffptr );
-				}
-				break;
-			}
-			case 0x90:
-			{
-				REG_WRITE( IO_MUX_GPIO6_REG, 1<<FUN_IE_S | 1<<FUN_DRV_S );  //Additional pull-up, 10mA drive.  Optional: 10k pull-up resistor.
-				REG_WRITE( IO_MUX_GPIO7_REG, 1<<FUN_IE_S | 3<<FUN_DRV_S );  //VCC for part 40mA drive.
-				rtc_cpu_freq_config_t m;
-				rtc_clk_cpu_freq_get_config( &m );
-
-				if( (sizeof(retbuff)-(retbuffptr - retbuff)) >= 18 && remain >= 2 )
-				{
-					int baudrate = *(iptr++);
-					baudrate |= (*(iptr++))<<8;
-
-					updi_clocks_per_bit = UPDIComputeClocksPerBit( m.freq_mhz, baudrate*32 );
-
-
-					UPDIPowerOn( pinmask, pinmaskpower );
-					uint8_t sib[17] = { 0 };
-					int r = UPDISetup( pinmask, m.freq_mhz, updi_clocks_per_bit, sib );
-					printf( "UPDISetup() = %d -> %s\n", r, sib );
-
-					retbuffptr[0] = r;
-					memcpy( retbuffptr + 1, sib, 17 );
-					retbuffptr += 18;
-				}
-				break;
-			}
-			case 0x91:
-			{
-				REG_WRITE( IO_MUX_GPIO6_REG, 1<<FUN_IE_S | 1<<FUN_DRV_S );  //Additional pull-up, 10mA drive.  Optional: 10k pull-up resistor.
-				REG_WRITE( IO_MUX_GPIO7_REG, 1<<FUN_IE_S | 3<<FUN_DRV_S );  //VCC for part 40mA drive.
-				UPDIPowerOn( pinmask, pinmaskpower );
-				break;
-			}
-			case 0x92:
-			{
-				REG_WRITE( IO_MUX_GPIO6_REG, 1<<FUN_IE_S | 1<<FUN_DRV_S );  //Additional pull-up, 10mA drive.  Optional: 10k pull-up resistor.
-				REG_WRITE( IO_MUX_GPIO7_REG, 1<<FUN_IE_S | 3<<FUN_DRV_S );  //VCC for part 40mA drive.
-
-				UPDIPowerOff( pinmask, pinmaskpower );
-				break;
-			}
-			case 0x93: // Flash 64-byte block.
-			{
-				REG_WRITE( IO_MUX_GPIO6_REG, 1<<FUN_IE_S | 1<<FUN_DRV_S );  //Additional pull-up, 10mA drive.  Optional: 10k pull-up resistor.
-				REG_WRITE( IO_MUX_GPIO7_REG, 1<<FUN_IE_S | 3<<FUN_DRV_S );  //VCC for part 40mA drive.
-
-				if( remain >= 2+64 )
-				{
-					int addytowrite = *(iptr++);
-					addytowrite |= (*(iptr++))<<8;
-					int r;
-					r = UPDIFlash( pinmask, updi_clocks_per_bit, addytowrite, iptr, 64, 0);
-					printf( "Flash Response: %d\n", r );
-					iptr += 64;
-
-					*(retbuffptr++) = r;
-				}
-				break;
-			}
-			case 0x94:
-			{
-				REG_WRITE( IO_MUX_GPIO6_REG, 1<<FUN_IE_S | 1<<FUN_DRV_S );  //Additional pull-up, 10mA drive.  Optional: 10k pull-up resistor.
-				REG_WRITE( IO_MUX_GPIO7_REG, 1<<FUN_IE_S | 3<<FUN_DRV_S );  //VCC for part 40mA drive.
-
-				if( remain >= 3 )
-				{
-					int addytorx = *(iptr++);
-					addytorx |= (*(iptr++))<<8;
-					int bytestorx = *(iptr++);
-
-					if( (sizeof(retbuff)-(retbuffptr - retbuff)) >= bytestorx + 1 )
-					{
-						retbuffptr[0] = UPDIReadMemoryArea( pinmask, updi_clocks_per_bit, addytorx, (uint8_t*)&retbuffptr[1], bytestorx );
-						retbuffptr += bytestorx + 1;
-					}
-				}
-				break;
-			}
-			case 0x95:
-			{
-				REG_WRITE( IO_MUX_GPIO6_REG, 1<<FUN_IE_S | 1<<FUN_DRV_S );  //Additional pull-up, 10mA drive.  Optional: 10k pull-up resistor.
-				REG_WRITE( IO_MUX_GPIO7_REG, 1<<FUN_IE_S | 3<<FUN_DRV_S );  //VCC for part 40mA drive.
-
-				*(retbuffptr++) = UPDIErase( pinmask, updi_clocks_per_bit );
-				break;
-			}
-			case 0x96:
-			{
-				*(retbuffptr++) = UPDIReset( pinmask, updi_clocks_per_bit );
-
-				break;
-			}
-			default:
-#endif
-      // UPDI Not implemented right now.
-      {
-        *(retbuffptr++) = 0xfe;
-        *(retbuffptr++) = cmd;
-        break;
-      }
     } else {
-      // Unknown Programmer
       *(retbuffptr++) = 0;
       *(retbuffptr++) = programmer_mode;
-
       break;
     }
   }
@@ -519,154 +334,166 @@ static void HandleCommandBuffer(uint8_t *buffer) {
 }
 
 int main() {
-  SystemInit();
-  Delay_Ms(1); // Ensures USB re-enumeration after bootloader or reset; Spec
-               // demand >2.5µs ( TDDIS )
-  usb_setup();
-
-  funGpioInitAll();
-
-  ConfigureIOForRVSWIO();
-#ifdef STATUS_LED
-  funPinMode(STATUS_LED, GPIO_Speed_10MHz | GPIO_CNF_OUT_PP);
-  funDigitalWrite(STATUS_LED, STATUS_LED_OFF);
-#endif
-
-  Delay_Ms(10);
-
-#if 0
-	// This tests the system to see if we can bring it up.
-	funDigitalWrite( PD2, 1 );
-	Delay_Ms(1);
-
-	int k;
-	for( k = 0; k < 10; k++ )
-	{
-		BB_PRINTF_DEBUG( "Sending\n" );
-		MCFWriteReg32( &state, DMSHDWCFGR, 0x5aa50000 | (1<<10) ); // Shadow Config Reg
-		MCFWriteReg32( &state, DMCFGR, 0x5aa50000 | (1<<10) );     // CFGR (1<<10 == Allow output from slave)
-		MCFWriteReg32( &state, DMSHDWCFGR, 0x5aa50000 | (1<<10) ); // Shadow Config Reg
-		MCFWriteReg32( &state, DMCFGR, 0x5aa50000 | (1<<10) );     // CFGR (1<<10 == Allow output from slave)
-		MCFWriteReg32( &state, DMCONTROL, 0x80000001 );            // Make the debug module work properly.
-		MCFWriteReg32( &state, DMCONTROL, 0x80000001 );            // Re-initiate a halt request.
-
-		uint32_t reg;
-		int ret = MCFReadReg32( &state, DMSTATUS, &reg );
-
-		BB_PRINTF_DEBUG( "%08x %d\n", (int)reg, ret );
+	SystemInit();
+	
+	// Mode check on PC3
+	RCC->APB2PCENR |= RCC_APB2Periph_GPIOC;
+	GPIOC->CFGLR &= ~(0xf << (4 * 3));
+	GPIOC->CFGLR |= (GPIO_Speed_In | GPIO_CNF_IN_PUPD) << (4 * 3);
+	GPIOC->BSHR = GPIO_BSHR_BS3; // Pull-up
+	Delay_Ms(10);
+	if (GPIOC->INDR & (1 << 3)) {
+		is_midi_mode = 1;
+		set_usb_mode_midi();
+	} else {
+		is_midi_mode = 0;
+		set_usb_mode_programmer();
 	}
-#endif
 
-  while (1) {
-    // printf( "%lu %lu %lu %08lx\n", rv003usb_internal_data.delta_se0_cyccount,
-    // rv003usb_internal_data.last_se0_cyccount,
-    // rv003usb_internal_data.se0_windup, RCC->CTLR );
-#if RV003USB_EVENT_DEBUGGING
-    uint32_t *ue;
-    while ((ue = GetUEvent())) {
-      BB_PRINTF_DEBUG("%lu %lx %lx %lx\n", ue[0], ue[1], ue[2], ue[3]);
-    }
+	Delay_Ms(1);
+	usb_setup();
+
+	if (is_midi_mode) {
+		// MIDI Init
+		// (PC2-PC5 are inputs, done above for PC3 but let's redo like demo)
+		GPIOC->CFGLR &= ~(0xf<<(4*2) | 0xf<<(4*3) | 0xf<<(4*4) | 0xf<<(4*5));
+		GPIOC->CFGLR |= (GPIO_Speed_In | GPIO_CNF_IN_PUPD) << (4*2) |
+						(GPIO_Speed_In | GPIO_CNF_IN_PUPD) << (4*3) |
+						(GPIO_Speed_In | GPIO_CNF_IN_PUPD) << (4*4) |
+						(GPIO_Speed_In | GPIO_CNF_IN_PUPD) << (4*5);
+		GPIOC->BSHR = GPIO_BSHR_BS2 | GPIO_BSHR_BS3 | GPIO_BSHR_BS4 | GPIO_BSHR_BS5;
+
+		// TIM2 Init
+		RCC->APB1PCENR |= RCC_APB1Periph_TIM2;
+		GPIOC->CFGLR &= ~(0xf<<(4*0));
+		GPIOC->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP_AF)<<(4*0);
+		GPIOC->CFGLR &= ~(0xf<<(4*1));
+		GPIOC->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP_AF)<<(4*1);
+		RCC->APB2PCENR |= RCC_APB2Periph_AFIO;
+		AFIO->PCFR1 |= AFIO_PCFR1_TIM2_REMAP_PARTIALREMAP2;
+		TIM2->PSC = 0x0008;
+		TIM2->CTLR1 |= TIM_ARPE;
+		TIM2->CHCTLR1 |= TIM_OC1M_1 | TIM_OC1M_0 | TIM_OC1PE; 
+		TIM2->CHCTLR2 |= TIM_OC3M_1 | TIM_OC3M_0 | TIM_OC3PE; 
+		TIM2->CCER |= TIM_CC1E | TIM_CC3E | TIM_CC1P;
+		TIM2->CH1CVR = 0;
+		TIM2->CH3CVR = 0;
+	} else {
+		// Programmer Init
+		funGpioInitAll();
+		ConfigureIOForRVSWIO();
+#ifdef STATUS_LED
+		funPinMode(STATUS_LED, GPIO_Speed_10MHz | GPIO_CNF_OUT_PP);
+		funDigitalWrite(STATUS_LED, STATUS_LED_OFF);
 #endif
-    if (scratch_run) {
-      scratch_return = 0;
-      HandleCommandBuffer(scratch);
-      scratch_run = 0;
-      scratch_return = 1;
-    }
-  }
+	}
+
+	while (1) {
+		if (is_midi_mode) {
+			scan_keyboard();
+		} else {
+			if (scratch_run) {
+				scratch_return = 0;
+				HandleCommandBuffer(scratch);
+				scratch_run = 0;
+				scratch_return = 1;
+			}
+		}
+	}
 }
 
 void usb_handle_user_in_request(struct usb_endpoint *e, uint8_t *scratchpad,
                                 int endp, uint32_t sendtok,
                                 struct rv003usb_internal *ist) {
-  // Make sure we only deal with control messages.  Like get/set feature
-  // reports.
-  if (endp) {
-    usb_send_empty(sendtok);
-  } else {
-    LogUEvent(5, endp, sendtok, scratch_run);
-    if (scratch_run) {
-      // Send NACK (can't accept any more data right now)
-      usb_send_data(0, 0, 2, 0x5A);
-    } else {
-      if (!e->max_len) {
-        usb_send_empty(sendtok);
-      } else {
-        int len = e->max_len;
-        int slen = len;
-        if (slen > 8)
-          slen = 8;
-        usb_send_data((uint8_t *)e->opaque, slen, 0, sendtok);
-        e->opaque += 8;
-        len -= 8;
-        if (len < 0)
-          len = 0;
-        e->max_len = len;
-        LogUEvent(6, e->max_len, slen, len);
-      }
-    }
-  }
+	if (is_midi_mode) {
+		if (endp && midi_in.len) {
+			usb_send_data( midi_in.buffer, midi_in.len, 0, sendtok );
+			midi_in.len = 0;
+		} else {
+			usb_send_empty( sendtok );
+		}
+		return;
+	}
+
+	if (endp) {
+		usb_send_empty(sendtok);
+	} else {
+		LogUEvent(5, endp, sendtok, scratch_run);
+		if (scratch_run) {
+			usb_send_data(0, 0, 2, 0x5A);
+		} else {
+			if (!e->max_len) {
+				usb_send_empty(sendtok);
+			} else {
+				int len = e->max_len;
+				int slen = len;
+				if (slen > 8)
+					slen = 8;
+				usb_send_data((uint8_t *)e->opaque, slen, 0, sendtok);
+				e->opaque += 8;
+				len -= 8;
+				if (len < 0)
+					len = 0;
+				e->max_len = len;
+				LogUEvent(6, e->max_len, slen, len);
+			}
+		}
+	}
 }
 
 void usb_handle_user_data(struct usb_endpoint *e, int current_endpoint,
                           uint8_t *data, int len,
                           struct rv003usb_internal *ist) {
-  if (scratch_run) {
-    // Send NACK (can't accept any more data right now)
-    usb_send_data(0, 0, 2, 0x5A);
-    return;
-  }
+	if (is_midi_mode) {
+		if (len) midi_receive(data);
+		if (len==8) midi_receive(&data[4]);
+		return;
+	}
 
-  usb_send_data(0, 0, 2, 0xD2); // Send ACK
-  int offset = e->count << 3;
-  int torx = e->max_len - offset;
-  if (torx > len)
-    torx = len;
-  if (torx > 0) {
-    memcpy(scratch + offset, data, torx);
-    e->count++;
-    if ((e->count << 3) >= e->max_len) {
-      scratch_run = e->max_len;
-    }
-  }
+	if (scratch_run) {
+		usb_send_data(0, 0, 2, 0x5A);
+		return;
+	}
+
+	usb_send_data(0, 0, 2, 0xD2);
+	int offset = e->count << 3;
+	int torx = e->max_len - offset;
+	if (torx > len)
+		torx = len;
+	if (torx > 0) {
+		memcpy(scratch + offset, data, torx);
+		e->count++;
+		if ((e->count << 3) >= e->max_len) {
+			scratch_run = e->max_len;
+		}
+	}
 }
 
 void usb_handle_hid_get_report_start(struct usb_endpoint *e, int reqLen,
                                      uint32_t lValueLSBIndexMSB) {
-  if (reqLen > sizeof(scratch))
-    reqLen = sizeof(scratch);
-
-  // You can check the lValueLSBIndexMSB word to decide what you want to do here
-  // But, whatever you point this at will be returned back to the host PC where
-  // it calls hid_get_feature_report.
-  //
-  // Please note, that on some systems, for this to work, your return length
-  // must match the length defined in HID_REPORT_COUNT, in your HID report, in
-  // usb_config.h
-
-  e->opaque = retbuff;
-  e->max_len = reqLen;
-  e->custom = 1;
-  scratch_return = 0;
+	if (is_midi_mode) return;
+	if (reqLen > sizeof(scratch))
+		reqLen = sizeof(scratch);
+	e->opaque = retbuff;
+	e->max_len = reqLen;
+	e->custom = 1;
+	scratch_return = 0;
 }
 
 void usb_handle_hid_set_report_start(struct usb_endpoint *e, int reqLen,
                                      uint32_t lValueLSBIndexMSB) {
-  // Here is where you get an alert when the host PC calls
-  // hid_send_feature_report.
-  //
-  // You can handle the appropriate message here.  Please note that in this
-  // example, the data is chunked into groups-of-8-bytes.
-  //
-  // Note that you may need to make this match HID_REPORT_COUNT, in your HID
-  // report, in usb_config.h
+	if (is_midi_mode) return;
+	e->opaque = scratch;
+	e->custom = 0;
+	if (scratch_run)
+		reqLen = 0;
+	if (reqLen > sizeof(scratch))
+		reqLen = sizeof(scratch);
+	e->max_len = reqLen;
+	LogUEvent(2, reqLen, lValueLSBIndexMSB, 0);
+}
 
-  e->opaque = scratch;
-  e->custom = 0;
-  if (scratch_run)
-    reqLen = 0;
-  if (reqLen > sizeof(scratch))
-    reqLen = sizeof(scratch);
-  e->max_len = reqLen;
-  LogUEvent(2, reqLen, lValueLSBIndexMSB, 0);
+void usb_handle_other_control_message( struct usb_endpoint * e, struct usb_urb * s, struct rv003usb_internal * ist )
+{
+	LogUEvent( SysTick->CNT, s->wRequestTypeLSBRequestMSB, s->lValueLSBIndexMSB, s->wLength );
 }
