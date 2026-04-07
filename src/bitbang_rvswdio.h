@@ -151,7 +151,9 @@ extern int ch5xx_write_flash_using_microblob(struct SWIOState * iss, uint32_t st
 #define DMSHDWCFGR   0x7E
 
 #ifndef __CH32V00x_H
-#define FLASH_STATR_WRPRTERR       ((uint8_t)0x10) 
+#ifndef FLASH_STATR_WRPRTERR
+#define FLASH_STATR_WRPRTERR       ((uint8_t)0x10)
+#endif 
 #define CR_PAGE_PG                 ((uint32_t)0x00010000)
 #define CR_BUF_LOAD                ((uint32_t)0x00040000)
 #ifndef FLASH_CTLR_MER
