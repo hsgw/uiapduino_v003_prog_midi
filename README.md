@@ -31,8 +31,8 @@ The following pin assignments are used for the uiapduino v003 board:
 ### MIDI Mode (UART)
 
 - **Baud Rate:** `31250 bps` (Standard MIDI Baud Rate)
-- **MIDI TX:** `PD5` (Output)
-- **MIDI RX:** `PD6` (Input, with internal pull-up)
+- **MIDI TX:** `PD6` (Output)
+- **MIDI RX:** `PD5` (Input, with internal pull-up)
 
 ### Other
 
