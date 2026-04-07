@@ -57,6 +57,40 @@ uint8_t is_midi_mode = 0;
 uint8_t midi_uart_rx_buffer[MIDI_UART_BUFF_SIZE];
 volatile uint16_t midi_uart_rx_read_ptr = 0;
 
+// MIDI TX Ring Buffer
+#define MIDI_TX_BUFF_SIZE 128
+uint8_t midi_uart_tx_buffer[MIDI_TX_BUFF_SIZE];
+volatile uint16_t midi_uart_tx_head = 0; // Where we add data
+volatile uint16_t midi_uart_tx_tail = 0; // Where DMA reads from
+volatile uint8_t midi_uart_tx_active = 0;
+volatile uint16_t midi_uart_tx_last_len = 0;
+
+void start_midi_tx_dma(void)
+{
+	if (midi_uart_tx_active || midi_uart_tx_head == midi_uart_tx_tail) return;
+
+	uint16_t len = (midi_uart_tx_head > midi_uart_tx_tail) ? 
+                   (midi_uart_tx_head - midi_uart_tx_tail) : 
+                   (MIDI_TX_BUFF_SIZE - midi_uart_tx_tail);
+	
+	midi_uart_tx_last_len = len;
+	midi_uart_tx_active = 1;
+
+	DMA1_Channel4->CFGR &= ~DMA_CFGR1_EN;
+	DMA1_Channel4->CNTR = len;
+	DMA1_Channel4->MADDR = (uint32_t)&midi_uart_tx_buffer[midi_uart_tx_tail];
+	DMA1_Channel4->CFGR |= DMA_CFGR1_EN;
+}
+
+void DMA1_Channel4_IRQHandler(void) __attribute__((interrupt));
+void DMA1_Channel4_IRQHandler(void)
+{
+	DMA1->INTFCR = DMA_CTCIF4; // Clear Transfer Complete flag
+	midi_uart_tx_tail = (midi_uart_tx_tail + midi_uart_tx_last_len) % MIDI_TX_BUFF_SIZE;
+	midi_uart_tx_active = 0;
+	start_midi_tx_dma();
+}
+
 typedef struct {
 	volatile uint8_t len;
 	uint8_t buffer[8];
@@ -114,8 +148,13 @@ void uart_midi_init(void)
 	DMA1_Channel5->CFGR = DMA_CFGR1_MINC | DMA_CFGR1_CIRC | DMA_CFGR1_PL_1; // Memory increment, Circular, High priority
 	DMA1_Channel5->CFGR |= DMA_CFGR1_EN;
 
-	// Enable UART1 DMA RX
-	USART1->CTLR3 |= USART_CTLR3_DMAR;
+	// DMA1 Channel 4 (USART1 TX) Configuration
+	DMA1_Channel4->PADDR = (uint32_t)&USART1->DATAR;
+	DMA1_Channel4->CFGR = DMA_CFGR1_MINC | DMA_CFGR1_DIR | DMA_CFGR1_TCIE;
+	NVIC_EnableIRQ(DMA1_Channel4_IRQn);
+
+	// Enable UART1 DMA RX/TX
+	USART1->CTLR3 |= USART_CTLR3_DMAR | USART_CTLR3_DMAT;
 
 	// Enable UART1 IDLE Interrupt in NVIC
 	NVIC_EnableIRQ(USART1_IRQn);
@@ -205,9 +244,15 @@ void midi_receive(uint8_t * msg)
 	}
 
 	for(uint8_t i = 0; i < len; i++) {
-		while(!(USART1->STATR & USART_STATR_TXE));
-		USART1->DATAR = msg[i+1];
+		uint16_t next_head = (midi_uart_tx_head + 1) % MIDI_TX_BUFF_SIZE;
+		// If buffer is full, we might have to wait or drop.
+		// For MIDI speed vs USB speed, it might fill if we spam.
+		while (next_head == midi_uart_tx_tail);
+
+		midi_uart_tx_buffer[midi_uart_tx_head] = msg[i+1];
+		midi_uart_tx_head = next_head;
 	}
+	start_midi_tx_dma();
 }
 
 // --- PROGRAMMER DATA ---
