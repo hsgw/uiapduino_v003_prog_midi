@@ -13,6 +13,13 @@ The UIAPduino v006 board features a CH32V003 for USB connectivity. By flashing t
 - MIDI Device Support
 - Configurable modes (Programmer/MIDI)
 
+## Tips
+
+- **DO NOT USE PC0 on v003 before disable reset on v006**
+- Disable RESET pin of v006 (https://github.com/cnlohr/rv003usb/blob/master/bootloader/Makefile#L17)
+  1. connect programmer to v006
+  2. `minichlink -w +a55adf20 option`
+
 ## Pin Assignments
 
 The following pin assignments are used for the uiapduino v003 board:
