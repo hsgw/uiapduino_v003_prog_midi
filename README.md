@@ -1,3 +1,5 @@
+(WIP: DO NOT USE)
+
 # usb prog-midi interface for UIAPduino v006
 
 This project provides firmware for the UIAPduino v006 board, leveraging the RV003USB platform. It offers both a USB programmer functionality and MIDI capabilities, allowing for flexible device interaction.

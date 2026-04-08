@@ -1,2 +1,9 @@
 .qwen/
 dist/
+
+# Build artifacts
+*.bin
+*.elf
+*.hex
+*.lst
+*.map
