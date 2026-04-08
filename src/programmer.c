@@ -1,4 +1,5 @@
 #include "ch32fun.h"
+#include "rv003usb.h"
 #include "programmer.h"
 #include <string.h>
 
@@ -248,4 +249,90 @@ void programmer_handle_command_buffer(uint8_t *buffer) {
 #ifdef STATUS_LED
   funDigitalWrite(STATUS_LED, STATUS_LED_OFF);
 #endif
+}
+
+// --- USB Callback Handlers for Programmer Mode ---
+
+void programmer_usb_handle_in_request(struct usb_endpoint *e, uint8_t *scratchpad,
+                                      int endp, uint32_t sendtok,
+                                      struct rv003usb_internal *ist) {
+  if (endp) {
+    usb_send_empty(sendtok);
+  } else {
+    LogUEvent(5, endp, sendtok, scratch_run);
+    if (scratch_run) {
+      usb_send_data(0, 0, 2, 0x5A);
+    } else {
+      if (!e->max_len) {
+        usb_send_empty(sendtok);
+      } else {
+        int len = e->max_len;
+        int slen = len;
+        if (slen > 8)
+          slen = 8;
+        usb_send_data((uint8_t *)e->opaque, slen, 0, sendtok);
+        e->opaque += 8;
+        len -= 8;
+        if (len < 0)
+          len = 0;
+        e->max_len = len;
+        LogUEvent(6, e->max_len, slen, len);
+      }
+    }
+  }
+}
+
+void programmer_usb_handle_data(struct usb_endpoint *e, int current_endpoint,
+                                uint8_t *data, int len,
+                                struct rv003usb_internal *ist) {
+  if (scratch_run) {
+    usb_send_data(0, 0, 2, 0x5A);
+    return;
+  }
+
+  usb_send_data(0, 0, 2, 0xD2);
+  int offset = e->count << 3;
+  int torx = e->max_len - offset;
+  if (torx > len)
+    torx = len;
+  if (torx > 0) {
+    memcpy(scratch + offset, data, torx);
+    e->count++;
+    if ((e->count << 3) >= e->max_len) {
+      scratch_run = e->max_len;
+    }
+  }
+}
+
+void programmer_usb_handle_hid_get_report_start(struct usb_endpoint *e, int reqLen,
+                                                uint32_t lValueLSBIndexMSB) {
+  if (reqLen > sizeof(scratch))
+    reqLen = sizeof(scratch);
+  e->opaque = retbuff;
+  e->max_len = reqLen;
+  e->custom = 1;
+  scratch_return = 0;
+}
+
+void programmer_usb_handle_hid_set_report_start(struct usb_endpoint *e, int reqLen,
+                                                uint32_t lValueLSBIndexMSB) {
+  e->opaque = scratch;
+  e->custom = 0;
+  if (scratch_run)
+    reqLen = 0;
+  if (reqLen > sizeof(scratch))
+    reqLen = sizeof(scratch);
+  e->max_len = reqLen;
+  LogUEvent(2, reqLen, lValueLSBIndexMSB, 0);
+}
+
+int programmer_process_pending(void) {
+  if (scratch_run) {
+    scratch_return = 0;
+    programmer_handle_command_buffer(scratch);
+    scratch_run = 0;
+    scratch_return = 1;
+    return 1;
+  }
+  return 0;
 }
