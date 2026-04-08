@@ -98,15 +98,11 @@ void usb_handle_user_in_request(struct usb_endpoint *e, uint8_t *scratchpad,
                                 int endp, uint32_t sendtok,
                                 struct rv003usb_internal *ist) {
   if (usb_mode == MODE_MIDI) {
-    if (endp && midi_in.len) {
-      usb_send_data(midi_in.buffer, midi_in.len, 0, sendtok);
-      midi_in.len = 0;
-    } else {
-      usb_send_empty(sendtok);
-    }
+    midi_usb_handle_in_request(e, scratchpad, endp, sendtok, ist);
     return;
   }
 
+  // Programmer mode
   if (endp) {
     usb_send_empty(sendtok);
   } else {
@@ -137,13 +133,11 @@ void usb_handle_user_data(struct usb_endpoint *e, int current_endpoint,
                           uint8_t *data, int len,
                           struct rv003usb_internal *ist) {
   if (usb_mode == MODE_MIDI) {
-    if (len)
-      midi_receive(data);
-    if (len == 8)
-      midi_receive(&data[4]);
+    midi_usb_handle_data(e, current_endpoint, data, len, ist);
     return;
   }
 
+  // Programmer mode
   if (scratch_run) {
     usb_send_data(0, 0, 2, 0x5A);
     return;
@@ -165,8 +159,12 @@ void usb_handle_user_data(struct usb_endpoint *e, int current_endpoint,
 
 void usb_handle_hid_get_report_start(struct usb_endpoint *e, int reqLen,
                                      uint32_t lValueLSBIndexMSB) {
-  if (usb_mode == MODE_MIDI)
+  if (usb_mode == MODE_MIDI) {
+    midi_usb_handle_hid_get_report_start(e, reqLen, lValueLSBIndexMSB);
     return;
+  }
+
+  // Programmer mode
   if (reqLen > sizeof(scratch))
     reqLen = sizeof(scratch);
   e->opaque = retbuff;
@@ -177,8 +175,12 @@ void usb_handle_hid_get_report_start(struct usb_endpoint *e, int reqLen,
 
 void usb_handle_hid_set_report_start(struct usb_endpoint *e, int reqLen,
                                      uint32_t lValueLSBIndexMSB) {
-  if (usb_mode == MODE_MIDI)
+  if (usb_mode == MODE_MIDI) {
+    midi_usb_handle_hid_set_report_start(e, reqLen, lValueLSBIndexMSB);
     return;
+  }
+
+  // Programmer mode
   e->opaque = scratch;
   e->custom = 0;
   if (scratch_run)

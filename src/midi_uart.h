@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+// Forward declarations for RV003USB types
+struct usb_endpoint;
+struct rv003usb_internal;
+
 // --- MIDI DATA ---
 #define MIDI_UART_BUFF_SIZE 128
 #define MIDI_TX_BUFF_SIZE 128
@@ -36,5 +40,17 @@ void midi_receive(uint8_t *msg);
 
 // Start DMA transmission for MIDI UART TX
 void start_midi_tx_dma(void);
+
+// USB callback handlers for MIDI mode
+void midi_usb_handle_in_request(struct usb_endpoint *e, uint8_t *scratchpad,
+                                int endp, uint32_t sendtok,
+                                struct rv003usb_internal *ist);
+void midi_usb_handle_data(struct usb_endpoint *e, int current_endpoint,
+                          uint8_t *data, int len,
+                          struct rv003usb_internal *ist);
+void midi_usb_handle_hid_get_report_start(struct usb_endpoint *e, int reqLen,
+                                          uint32_t lValueLSBIndexMSB);
+void midi_usb_handle_hid_set_report_start(struct usb_endpoint *e, int reqLen,
+                                          uint32_t lValueLSBIndexMSB);
 
 #endif // _MIDI_UART_H

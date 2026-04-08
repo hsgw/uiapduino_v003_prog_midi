@@ -1,4 +1,5 @@
 #include "ch32fun.h"
+#include "rv003usb.h"
 #include "midi_uart.h"
 #include <string.h>
 
@@ -217,4 +218,42 @@ void midi_receive(uint8_t *msg) {
     midi_uart_tx_head = next_head;
   }
   start_midi_tx_dma();
+}
+
+// --- USB Callback Handlers for MIDI Mode ---
+
+void midi_usb_handle_in_request(struct usb_endpoint *e, uint8_t *scratchpad,
+                                int endp, uint32_t sendtok,
+                                struct rv003usb_internal *ist) {
+  if (endp && midi_in.len) {
+    usb_send_data(midi_in.buffer, midi_in.len, 0, sendtok);
+    midi_in.len = 0;
+  } else {
+    usb_send_empty(sendtok);
+  }
+}
+
+void midi_usb_handle_data(struct usb_endpoint *e, int current_endpoint,
+                          uint8_t *data, int len,
+                          struct rv003usb_internal *ist) {
+  if (len)
+    midi_receive(data);
+  if (len == 8)
+    midi_receive(&data[4]);
+}
+
+void midi_usb_handle_hid_get_report_start(struct usb_endpoint *e, int reqLen,
+                                          uint32_t lValueLSBIndexMSB) {
+  // No-op for MIDI mode
+  (void)e;
+  (void)reqLen;
+  (void)lValueLSBIndexMSB;
+}
+
+void midi_usb_handle_hid_set_report_start(struct usb_endpoint *e, int reqLen,
+                                          uint32_t lValueLSBIndexMSB) {
+  // No-op for MIDI mode
+  (void)e;
+  (void)reqLen;
+  (void)lValueLSBIndexMSB;
 }
