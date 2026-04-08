@@ -5,7 +5,7 @@ CH32FUN:=../rv003usb/ch32fun/ch32fun
 TARGET_MCU:=CH32V003
 DIST_DIR:=../dist
 
-ADDITIONAL_C_FILES+=../rv003usb/rv003usb/rv003usb.S ../rv003usb/rv003usb/rv003usb.c
+ADDITIONAL_C_FILES+=../rv003usb/rv003usb/rv003usb.S ../rv003usb/rv003usb/rv003usb.c midi_uart.c
 EXTRA_CFLAGS:=-I../rv003usb/lib -I../rv003usb/rv003usb
 
 include $(CH32FUN)/ch32fun.mk
