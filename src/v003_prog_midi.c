@@ -50,7 +50,12 @@
 #define PIN_MODE_SWITCH PC3
 
 // --- MODE SWITCH ---
-uint8_t is_midi_mode = 0;
+typedef enum {
+  MODE_PROGRAMMER = 0,
+  MODE_MIDI = 1,
+} usb_mode_t;
+
+usb_mode_t usb_mode = MODE_PROGRAMMER;
 
 // --- MIDI DATA ---
 #define MIDI_UART_BUFF_SIZE 128
@@ -516,17 +521,17 @@ int main() {
   funDigitalWrite(PIN_MODE_SWITCH, 1); // Pull-up
   Delay_Ms(10);
   if (funDigitalRead(PIN_MODE_SWITCH)) {
-    is_midi_mode = 1;
+    usb_mode = MODE_MIDI;
     set_usb_mode_midi();
   } else {
-    is_midi_mode = 0;
+    usb_mode = MODE_PROGRAMMER;
     set_usb_mode_programmer();
   }
 
   Delay_Ms(1);
   usb_setup();
 
-  if (is_midi_mode) {
+  if (usb_mode == MODE_MIDI) {
     uart_midi_init();
   } else {
     // Programmer Init
@@ -538,11 +543,12 @@ int main() {
 #endif
   }
 
+  // This is required in all USB modes. Turn on the target power.
   funPinMode(PIN_TARGETPOWER, PIN_TARGETPOWER_MODE);
   funDigitalWrite(PIN_TARGETPOWER, POWER_ON);
 
   while (1) {
-    if (is_midi_mode) {
+    if (usb_mode == MODE_MIDI) {
       process_midi_uart_to_usb();
     } else {
       if (scratch_run) {
@@ -558,7 +564,7 @@ int main() {
 void usb_handle_user_in_request(struct usb_endpoint *e, uint8_t *scratchpad,
                                 int endp, uint32_t sendtok,
                                 struct rv003usb_internal *ist) {
-  if (is_midi_mode) {
+  if (usb_mode == MODE_MIDI) {
     if (endp && midi_in.len) {
       usb_send_data(midi_in.buffer, midi_in.len, 0, sendtok);
       midi_in.len = 0;
@@ -597,7 +603,7 @@ void usb_handle_user_in_request(struct usb_endpoint *e, uint8_t *scratchpad,
 void usb_handle_user_data(struct usb_endpoint *e, int current_endpoint,
                           uint8_t *data, int len,
                           struct rv003usb_internal *ist) {
-  if (is_midi_mode) {
+  if (usb_mode == MODE_MIDI) {
     if (len)
       midi_receive(data);
     if (len == 8)
@@ -626,7 +632,7 @@ void usb_handle_user_data(struct usb_endpoint *e, int current_endpoint,
 
 void usb_handle_hid_get_report_start(struct usb_endpoint *e, int reqLen,
                                      uint32_t lValueLSBIndexMSB) {
-  if (is_midi_mode)
+  if (usb_mode == MODE_MIDI)
     return;
   if (reqLen > sizeof(scratch))
     reqLen = sizeof(scratch);
@@ -638,7 +644,7 @@ void usb_handle_hid_get_report_start(struct usb_endpoint *e, int reqLen,
 
 void usb_handle_hid_set_report_start(struct usb_endpoint *e, int reqLen,
                                      uint32_t lValueLSBIndexMSB) {
-  if (is_midi_mode)
+  if (usb_mode == MODE_MIDI)
     return;
   e->opaque = scratch;
   e->custom = 0;
