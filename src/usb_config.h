@@ -7,7 +7,7 @@
 
 #define USB_PORT D   // [A,C,D] GPIO Port to use with D+, D- and DPU
 #define USB_PIN_DP 3 // [0-4] GPIO Number for USB D+ Pin
-#define USB_PIN_DM 4 // [0-4] GPIO Number for USB D- Pin
+#define USB_PIN_DM 2 // [0-4] GPIO Number for USB D- Pin
 // #define USB_PIN_DPU 5  // [0-7] GPIO for feeding the 1.5k Pull-Up on USB D-
 // Pin; Comment out if not used / tied to 3V3!
 
@@ -92,7 +92,7 @@ static const uint8_t programmer_config_descriptor[] = {
     0x01, // bConfigurationValue
     0x00, // iConfiguration
     0x80, // bmAttributes
-    0x64, // bMaxPower (200mA)
+    0xFA, // bMaxPower (200mA)
 
     9,    // bLength
     4,    // bDescriptorType
@@ -263,13 +263,14 @@ static const uint8_t midi_config_descriptor[] = {
 
 // Common Strings
 // Manufacturer strings: Separated for different modes.
-#define STR_MANUFACTURER_PROG u"CNLohr" // Example: Programmer Manufacturer Name
+#define STR_MANUFACTURER_PROG u"UIAP" // Example: Programmer Manufacturer Name
 #define STR_MANUFACTURER_MIDI                                                  \
-  u"UIAPDuino" // Example: MIDI Manufacturer Name (can be same as PROG if
-               // desired)
+  u"UIAP" // Example: MIDI Manufacturer Name (can be same as PROG if
+          // desired)
 
 // Product strings for different modes
-#define STR_PRODUCT_PROG u"RV003 RVSWDIO Programmer"
+#define STR_PRODUCT_PROG                                                       \
+  u"CNLohr RV003 RVSWDIO Programmer Customized for UIAPduino"
 #define STR_PRODUCT_MIDI u"RV003 MIDI Interface"
 #ifndef STR_SERIAL // Serial number string
 #define STR_SERIAL u"RVSWDIO003-01"

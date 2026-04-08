@@ -30,12 +30,12 @@
 #define PROGRAMMER_PROTOCOL_NUMBER 5
 
 #define PIN_SWCLK PC5       // Remappable.
-#define PIN_TARGETPOWER PD2 // Remappable
+#define PIN_TARGETPOWER PC0 // Remappable
 #define POWER_ON 1
 #define POWER_OFF 0
 #define PIN_TARGETPOWER_MODE GPIO_CFGLR_OUT_10Mhz_PP
 
-#define STATUS_LED PC0
+// #define STATUS_LED PC0
 #ifdef STATUS_LED
 #define STATUS_LED_OFF 0
 #define STATUS_LED_ON 1
@@ -123,18 +123,27 @@ void uart_midi_init(void) {
       RCC_APB2Periph_USART1 | RCC_APB2Periph_GPIOD | RCC_APB2Periph_AFIO;
   RCC->AHBPCENR |= RCC_AHBPeriph_DMA1 | RCC_AHBPeriph_SRAM;
 
-  // UART1 to PD5(RX) and PD6(TX) (Remap 2)
-  AFIO->PCFR1 &= ~(AFIO_PCFR1_USART1_REMAP | AFIO_PCFR1_USART1_REMAP_1);
-  AFIO->PCFR1 |= AFIO_PCFR1_USART1_REMAP_1;
+  // // UART1 to PD5(RX) and PD6(TX) (Remap 2)
+  // AFIO->PCFR1 &= ~(AFIO_PCFR1_USART1_REMAP | AFIO_PCFR1_USART1_REMAP_1);
+  // AFIO->PCFR1 |= AFIO_PCFR1_USART1_REMAP_1;
 
-  // PD5 as UART1 RX (Input floating / pull-up)
-  GPIOD->CFGLR &= ~(0xf << (4 * 5));
-  GPIOD->CFGLR |= (GPIO_Speed_In | GPIO_CNF_IN_PUPD) << (4 * 5);
-  GPIOD->BSHR = GPIO_BSHR_BS5; // Pull-up for PD5
+  // // PD5 as UART1 RX (Input floating / pull-up)
+  // GPIOD->CFGLR &= ~(0xf << (4 * 5));
+  // GPIOD->CFGLR |= (GPIO_Speed_In | GPIO_CNF_IN_PUPD) << (4 * 5);
+  // GPIOD->BSHR = GPIO_BSHR_BS5; // Pull-up for PD5
 
-  // PD6 as UART1 TX (10MHz Output alt func, push-pull)
+  // // PD6 as UART1 TX (10MHz Output alt func, push-pull)
+  // GPIOD->CFGLR &= ~(0xf << (4 * 6));
+  // GPIOD->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP_AF) << (4 * 6);
+
+  // PD6 as UART1 RX (Input floating / pull-up)
   GPIOD->CFGLR &= ~(0xf << (4 * 6));
-  GPIOD->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP_AF) << (4 * 6);
+  GPIOD->CFGLR |= (GPIO_Speed_In | GPIO_CNF_IN_PUPD) << (4 * 6);
+  GPIOD->BSHR = GPIO_BSHR_BS6; // Pull-up for PD6
+
+  // PD5 as UART1 TX (10MHz Output alt func, push-pull)
+  GPIOD->CFGLR &= ~(0xf << (4 * 5));
+  GPIOD->CFGLR |= (GPIO_Speed_10MHz | GPIO_CNF_OUT_PP_AF) << (4 * 5);
 
   // UART1 Configuration: 31250 bps @ 48MHz
   // BRR = 48,000,000 / 31250 = 1536 (0x0600)
@@ -528,6 +537,9 @@ int main() {
     funDigitalWrite(STATUS_LED, STATUS_LED_OFF);
 #endif
   }
+
+  funPinMode(PIN_TARGETPOWER, PIN_TARGETPOWER_MODE);
+  funDigitalWrite(PIN_TARGETPOWER, POWER_ON);
 
   while (1) {
     if (is_midi_mode) {
