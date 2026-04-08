@@ -1,6 +1,6 @@
 all : flash
 
-TARGET:=midi_blink
+TARGET:=midi_echoback
 
 # CH32V006 - change to CH32V003 if needed
 TARGET_MCU?=CH32V006
